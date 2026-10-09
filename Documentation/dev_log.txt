@@ -1,3 +1,8 @@
+Commit: Fork and Copy on write - Part 4
+Time: 2026/10/09 8:24
+DEV_LOG:
+        阅读了LKA，更新了设计文档和里程碑；更新了README；
+
 Commit: Update daily
 Time: 2026/10/02 22:57
 DEV_LOG:
