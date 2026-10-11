@@ -1,3 +1,8 @@
+Commit: Fork and Copy on write - Part 5
+Time: 2026/10/11 23:00
+DEV_LOG:
+	更新了设计文档，确定了新的task_struct定义；决定优先重构当前代码，再做进程复制流程；
+
 Commit: Fork and Copy on write - Part 4
 Time: 2026/10/09 8:24
 DEV_LOG:

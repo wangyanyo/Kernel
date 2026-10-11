@@ -1,0 +1,42 @@
+1、今天看完了LKA中进程复制相关的部分
+2、看了一遍进程复制相关的Linux源码
+3、开始设计当前代码方案，首先确定我们的task_struct结构定义，之前的task_struct定义的有些粗糙，这次仿照Linux重新定义该结构，并重构代码；
+4、重构好之后再做进程复制相关的代码；
+
+新定义的task_struct结构：
+struct task_struct {
+        volatile long state;
+        void *stack;
+	atomic_t usage;
+	unsigned int flags;
+        
+	struct mm_struct *mm;
+
+        int exit_state;
+	int exit_code;
+
+        pid_t pid;
+
+	struct list_head tasks;
+
+        struct task_struct *parent;
+        struct list_head children;
+        struct list_head sibling;
+
+	struct thread_struct thread;
+
+	struct keyboard_buffer {
+		char buffer[KERNEL_KEYBOARD_BUFFER_SIZE];
+		int head;
+		int tail;
+		int size;
+	} keyboard;
+
+	struct process_argument argument;
+};
+
+明天继续细分 thread_union、thread_info、atomic_t、mm_struct、list_head、thread_struct 的定义，还有各个标志和状态的定义；
+做完这个项目，后续的项目是：
+- 写时复制
+- 命名空间
+- 创建线程
