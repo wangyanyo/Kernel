@@ -1,3 +1,9 @@
+Commit: Update daily
+Time: 2026/10/18 23:06
+DEV_LOG:
+        更新了daily文档，总结出目前的设计文档太过臃肿，直接导致了大颗粒度的修改；
+	决定尝试将一个项目分成若干个小项目，每个小项目都对应一个简洁的设计文档的开发方式；
+
 Commit: Fork and Copy on write - Part 5
 Time: 2026/10/11 23:00
 DEV_LOG:
