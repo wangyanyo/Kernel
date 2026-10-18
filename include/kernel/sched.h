@@ -1,19 +1,13 @@
 #ifndef __KERNEL_SCHED_H
 #define __KERNEL_SCHED_H
 
-#include "task.h"
-#include "config.h"
-
-typedef enum {
-	PROCESS_FILETYPE_ELF,
-	PROCESS_FILETYPE_BINARY,
-} PROCESS_FILETYPE;
-
-// 这里已经有VA_area的雏形了
-struct process_allocation {
-	void *ptr;
-	size_t size;
-};
+#include "asm-x86/processor.h"
+#include "asm-x86/current.h"
+#include "asm-x86/atomic.h"
+#include "kernel/config.h"
+#include "kernel/mm_types.h"
+#include "kernel/list.h"
+#include "kernel/types.h"
 
 struct command_argument {
 	char argument[512];
@@ -26,28 +20,25 @@ struct process_argument {
 };
 
 struct task_struct {
-	/* The process id */
-	uint16_t id;
+        volatile long state;
+        void *stack;
+	atomic_t usage;
+	unsigned int flags;
+        
+	struct mm_struct *mm;
 
-	char filename[KERNEL_MAX_PATH];
+        int exit_state;
+	int exit_code;
 
-	/* The main process task */
-	struct thread_info *task;
+        pid_t pid;
 
-	/* The memory (malloc) allocations of the process */
-	struct process_allocation allocations[KERNEL_MAX_PROGRAM_ALLOCATIONS];
+	struct list_head tasks;
 
-	PROCESS_FILETYPE filetype;
-	union {
-		void *ptr;
-		struct elf_file *elf_file;
-	};
+        struct task_struct *parent;
+        struct list_head children;
+        struct list_head sibling;
 
-	/* The physical pointer to the stack memory */
-	void *stack;
-
-	/* The size of the data pointed by 'ptr' */
-	uint32_t size;
+	struct thread_struct thread;
 
 	struct keyboard_buffer {
 		char buffer[KERNEL_KEYBOARD_BUFFER_SIZE];
@@ -57,13 +48,10 @@ struct task_struct {
 	} keyboard;
 
 	struct process_argument argument;
-
-	/* 进程返回值 */
-	int res;
 };
 
-struct task_struct *process_get(int process_id);
-struct task_struct *process_current();
+struct task_struct *find_task_by_pid(pid_t nr);
+
 int process_load_for_slot(char *filename, struct task_struct **process, int process_slot);
 int process_load(char *filename, struct task_struct **process);
 int process_load_switch(char *filename, struct task_struct **process);
@@ -74,5 +62,28 @@ void process_get_argument(struct task_struct *process, int *argc, char ***argv);
 int process_inject_argument(struct task_struct *process, struct command_argument *root_argument);
 int process_terminate(struct task_struct *process);
 int process_switch(struct task_struct *process);
+
+struct task_struct *task_new(struct task_struct *process);
+struct task_struct *task_get_next();
+int task_free(struct task_struct *task);
+
+void task_return(struct registers* regs);
+void restore_general_purpose_registers(struct registers* regs);
+void user_registers();
+
+int task_switch(struct task_struct *task);
+int task_page();
+int task_page_task(struct task_struct *task);
+int task_run_first_ever_task();
+
+void task_current_save_state(struct interrupt_frame *frame);
+
+int copy_string_from_task(struct task_struct *task, void *virtual, void *phys, int max);
+
+void *task_get_stack_item(struct task_struct *task, int index);
+
+void *task_virtual_addr_to_physical(struct task_struct *task, void *virtual_addr);
+
+void task_next();
 
 #endif

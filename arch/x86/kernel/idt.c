@@ -1,5 +1,6 @@
 #include "asm-x86/idt.h"
 #include "asm-x86/io.h"
+#include "asm-x86/current.h"
 
 #include "kernel/config.h"
 #include "kernel/print.h"
@@ -25,7 +26,7 @@ extern void isr80h_wrapper();
 
 static void idt_handle_exception()
 {
-	process_terminate(process_current());
+	process_terminate(current);
 	task_next();
 }
 

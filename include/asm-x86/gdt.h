@@ -1,5 +1,5 @@
-#ifndef __ASM_X86_DGT_H
-#define __ASM_X86_DGT_H
+#ifndef __ASM_I386_GDT_H
+#define __ASM_I386_GDT_H
 
 #include <stdint.h>
 

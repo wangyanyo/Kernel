@@ -14,7 +14,6 @@
 #include "kernel/string.h"
 #include "kernel/config.h"
 #include "kernel/sched.h"
-#include "kernel/task.h"
 #include "kernel/isr80h.h"
 #include "kernel/keyboard.h"
 

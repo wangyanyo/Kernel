@@ -1,4 +1,5 @@
 #include "asm-x86/idt.h"
+#include "asm-x86/current.h"
 
 #include "kernel/isr80h.h"
 #include "kernel/config.h"
@@ -11,16 +12,16 @@
 
 void *isr80h_command0_sum(struct interrupt_frame *frame)
 {
-	uint32_t item_1 = (uint32_t)task_get_stack_item(task_current(), 0);
-	uint32_t item_2 = (uint32_t)task_get_stack_item(task_current(), 1);
+	uint32_t item_1 = (uint32_t)task_get_stack_item(current, 0);
+	uint32_t item_2 = (uint32_t)task_get_stack_item(current, 1);
 	return (void *)(item_1 + item_2);
 }
 
 void *isr80h_command1_print(struct interrupt_frame *frame)
 {
-	char *user_string_virt_ptr = task_get_stack_item(task_current(), 0);
+	char *user_string_virt_ptr = task_get_stack_item(current, 0);
 	char buf[1024];
-	copy_string_from_task(task_current(), user_string_virt_ptr, buf, sizeof(buf));
+	copy_string_from_task(current, user_string_virt_ptr, buf, sizeof(buf));
 	terminal_print(buf);
 	return 0;
 }
@@ -33,21 +34,21 @@ void *isr80h_command2_getkey(struct interrupt_frame *frame)
 
 void *isr80h_command3_putchar(struct interrupt_frame *frame)
 {
-	void *item = task_get_stack_item(task_current(), 0);
+	void *item = task_get_stack_item(current, 0);
 	terminal_print_char((char)((int)item));
 	return 0;
 }
 
 void *isr80h_command4_malloc(struct interrupt_frame *frame)
 {
-	void *item = task_get_stack_item(task_current(), 0);
-	return process_malloc(task_current()->process, (size_t)item);
+	void *item = task_get_stack_item(current, 0);
+	return process_malloc(current->process, (size_t)item);
 }
 
 void *isr80h_command5_free(struct interrupt_frame *frame)
 {
-	void *item = task_get_stack_item(task_current(), 0);
-	process_free(task_current()->process, item);
+	void *item = task_get_stack_item(current, 0);
+	process_free(current->process, item);
 	return NULL;
 }
 
@@ -58,8 +59,8 @@ void *isr80h_command6_process_load_start(struct interrupt_frame *frame)
 	char filepath[KERNEL_MAX_PATH] = "0:/";
 	struct task_struct *process = NULL;
 
-	user_data_ptr = task_get_stack_item(task_current(), 0);
-	ret = copy_string_from_task(task_current(), user_data_ptr, filepath + 3, KERNEL_MAX_PATH - 3);
+	user_data_ptr = task_get_stack_item(current, 0);
+	ret = copy_string_from_task(current, user_data_ptr, filepath + 3, KERNEL_MAX_PATH - 3);
 	if (ret < 0)
 		goto out;
 
@@ -83,8 +84,8 @@ void *isr80h_command7_invake_system_command(struct interrupt_frame *frame)
 	struct task_struct *process = NULL;
 	char *program_name;
 
-	root_command_argument = task_virtual_addr_to_physical(task_current(),
-		task_get_stack_item(task_current(), 0));
+	root_command_argument = task_virtual_addr_to_physical(current,
+		task_get_stack_item(current, 0));
 	if (!root_command_argument || strlen(root_command_argument->argument) == 0) {
 		ret = -EINVAGS;
 		goto out;
@@ -110,18 +111,18 @@ out:
 
 void *isr80h_command8_get_program_argument(struct interrupt_frame *frame)
 {
-	struct process_argument *argument = task_virtual_addr_to_physical(task_current(),
-		task_get_stack_item(task_current(), 0));
+	struct process_argument *argument = task_virtual_addr_to_physical(current,
+		task_get_stack_item(current, 0));
 	// 这里有点thread_info的雏形，task->thread_info，process->task_struct，万变不器离其宗
-	process_get_argument(task_current()->process, &argument->argc, &argument->argv);
+	process_get_argument(current->process, &argument->argc, &argument->argv);
 	return 0;
 }
 
 /* 用户程序结束时，会向内核传递一个返回值，该返回值会通过内核转交给父进程 */
 void *isr80h_command9_exit(struct interrupt_frame *frame)
 {
-	void *item = task_get_stack_item(task_current(), 0);
-	struct task_struct *process = task_current()->process;
+	void *item = task_get_stack_item(current, 0);
+	struct task_struct *process = current->process;
 
 	process_terminate(process);
 	process->res = (int)item;

@@ -1,3 +1,9 @@
+Commit: Abandon this large change; merge into a archive branch.
+Time: 2026/10/18 22:45
+DEV_LOG:
+	我重构了所有进程相关的数据结构及其内部成员，导致我要重构大部分的源代码，此次改动颗粒度太大，我应该小步快跑而不是这样；
+	因此该修改合入archive分支，用于参考；
+
 Commit: Fork and Copy on write - Part 5
 Time: 2026/10/11 23:00
 DEV_LOG:

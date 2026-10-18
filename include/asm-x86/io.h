@@ -1,5 +1,5 @@
-#ifndef __ASM_X86_IO_H
-#define __ASM_X86_IO_H
+#ifndef __ASM_I386_IO_H
+#define __ASM_I386_IO_H
 
 unsigned char insb(unsigned short port);
 unsigned short insw(unsigned short port);
