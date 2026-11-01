@@ -1,3 +1,5 @@
+#include "asm-x86/idt.h"
+
 #include "kernel/sched.h"
 #include "kernel/config.h"
 #include "kernel/status.h"
@@ -8,28 +10,191 @@
 #include "kernel/print.h"
 #include "kernel/kernel.h"
 
-static struct task_struct *processes[KERNEL_MAX_PROCESSES] = {};
-static struct task_struct *current_process;
+static struct task_struct *tasks[KERNEL_MAX_TASKS] = {};
 
-struct task_struct *process_get(int process_id)
+struct task_struct *current_task = 0;
+
+// 简易调度器，就绪队列为一条链表；调度实体为task_struct->list
+LIST_HEAD(ready_queue);
+
+extern void task_return(struct registers* regs);
+extern void restore_general_purpose_registers(struct registers* regs);
+extern void user_registers();
+
+static void task_insert(struct task_struct *tsk)
 {
-	if (process_id < 0 || process_id >= KERNEL_MAX_PROCESSES)
+	if (list_empty(&ready_queue)) {
+		current_task = tsk;
+	}
+	list_add(&tsk->list, &ready_queue);
+}
+
+static struct task_struct *task_get_next()
+{
+	if (list_empty(&ready_queue)) {
+		panic("Kernel panic: no ready_queue exist!");
+	}
+	return list_first_entry(&ready_queue, struct task_struct, list);
+}
+
+static void task_list_remove(struct task_struct *tsk)
+{
+	list_del_init(&tsk->list);
+
+	if (current_task == tsk) {
+		current_task = task_get_next();
+	}
+}
+
+static int task_paging_init(struct task_struct *tsk)
+{
+	tsk->page_directory = paging_new_4gb_chunk(PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
+	if (!tsk->page_directory)
+		return -EIO;
+	return 0;
+}
+
+static int task_page_task(struct task_struct *task)
+{
+	user_registers();
+	task_switch(task);
+	return 0;
+}
+
+static void task_save_state(struct task_struct *tsk, struct interrupt_frame *frame)
+{
+	tsk->registers.ip = frame->ip;
+	tsk->registers.cs = frame->cs;
+	tsk->registers.flags = frame->flags;
+	tsk->registers.esp = frame->esp;
+	tsk->registers.ss = frame->ss;
+	tsk->registers.eax = frame->eax;
+	tsk->registers.ebp = frame->ebp;
+	tsk->registers.ebx = frame->ebx;
+	tsk->registers.ecx = frame->ecx;
+	tsk->registers.edi = frame->edi;
+	tsk->registers.edx = frame->edx;
+	tsk->registers.esi = frame->esi;
+}
+
+struct task_struct *task_get(int pid)
+{
+	if (pid < 0 || pid >= KERNEL_MAX_TASKS)
 		return NULL;
 	
-	return processes[process_id];
+	return tasks[pid];
 }
 
-struct task_struct *process_current()
+struct task_struct *task_current()
 {
-	return current_process;
+	return current_task;
 }
 
-static void process_init(struct task_struct *process)
+int task_switch(struct task_struct *tsk)
 {
-	memset(process, 0x00, sizeof(struct task_struct));
+	current_task = tsk;
+	paging_switch(tsk->page_directory);
+	return 0;
 }
 
-static int process_load_bin(char *filename, struct task_struct *process)
+void task_next()
+{
+	struct task_struct* next_task = current_task;
+	if (!next_task)
+		panic("No more ready_queue!\n");
+
+	task_switch(next_task);
+	task_return(&next_task->registers);
+}
+
+int task_page()
+{
+	user_registers();
+	task_switch(current_task);
+	return 0;
+}
+
+int task_run_first_ever_task()
+{
+	if (!current_task)
+		panic("task_run_first_ever_task: No current task exists!\n");
+
+	task_switch(current_task);
+	task_return(&current_task->registers);
+	return 0;
+}
+
+void task_current_save_state(struct interrupt_frame *frame)
+{
+	if (!task_current())
+		panic("No current task to save");
+	
+	struct task_struct *tsk = task_current();
+	task_save_state(tsk, frame);
+}
+
+int copy_string_from_task(struct task_struct *tsk, void *virtual, void *phys, int max)
+{
+	int res = 0;
+
+	if (!tsk || !virtual || !phys) {
+		res = -EINVAGS;
+		goto out;
+	}
+
+	if (max < 0 || max > PAGING_PAGE_SIZE) {
+		res = -EINVAGS;
+		goto out;
+	}
+
+	void *tmp = kzalloc(max);
+	if (!tmp) {
+		res = -ENOMEM;
+		goto out;
+	}
+
+	uint32_t old_entry = paging_get(tsk->page_directory, virtual);
+	res = paging_map(tsk->page_directory, tmp, tmp, PAGING_IS_WRITEABLE | PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
+	if (res != KERNEL_ALL_OK)
+		goto free_out;
+	paging_switch(tsk->page_directory);
+	strncpy(tmp, virtual, max);
+	kernel_page();
+
+	res = paging_set(tsk->page_directory->directory_entry, tmp, old_entry);
+	if (res != KERNEL_ALL_OK)
+		goto free_out;
+
+	strncpy(phys, tmp, max);
+
+free_out:
+	kfree(tmp);
+out:
+	return res;
+
+}
+
+void *task_get_stack_item(struct task_struct *tsk, int index)
+{
+	void *result = 0;
+	uint32_t *sp_ptr = (uint32_t *)tsk->registers.esp;
+	task_page_task(tsk);
+	result = (void *)sp_ptr[index];
+	kernel_page();
+	return result;
+}
+
+void *task_virtual_addr_to_physical(struct task_struct *tsk, void *virtual_addr)
+{
+	return paging_get_physical_address(tsk->page_directory, virtual_addr);
+}
+
+static void task_init(struct task_struct *tsk)
+{
+	memset(tsk, 0x00, sizeof(struct task_struct));
+}
+
+static int task_load_bin(char *filename, struct task_struct *tsk)
 {
 	int res = 0;
 	int fd;
@@ -57,9 +222,9 @@ static int process_load_bin(char *filename, struct task_struct *process)
 		goto out;
 	}
 
-	process->filetype = PROCESS_FILETYPE_BINARY;
-	process->ptr = program_data_ptr;
-	process->size = stat.filesize;
+	tsk->filetype = TASK_FILETYPE_BINARY;
+	tsk->ptr = program_data_ptr;
+	tsk->size = stat.filesize;
 
 out:
 	if (res < 0)
@@ -70,7 +235,7 @@ out:
 }
 
 
-static int process_load_elf(char *filename, struct task_struct *process)
+static int task_load_elf(char *filename, struct task_struct *tsk)
 {
 	int res = 0;
 	struct elf_file *elf_file = NULL;
@@ -79,25 +244,25 @@ static int process_load_elf(char *filename, struct task_struct *process)
 	if (res < 0)
 		return res;
 	
-	process->elf_file = elf_file;
-	process->filetype = PROCESS_FILETYPE_ELF;
+	tsk->elf_file = elf_file;
+	tsk->filetype = TASK_FILETYPE_ELF;
 
 	return res;
 }
 
-static int process_load_data(char *filename, struct task_struct *process)
+static int task_load_data(char *filename, struct task_struct *tsk)
 {
 	int res = 0;
-	res = process_load_elf(filename, process);
+	res = task_load_elf(filename, tsk);
 	if (res == -EINFORMATS)
-		res = process_load_bin(filename, process);
+		res = task_load_bin(filename, tsk);
 	return res;
 }
 
-static int process_map_elf(struct task_struct *process)
+static int task_map_elf(struct task_struct *tsk)
 {
 	int res = 0;
-	struct elf_file *file = process->elf_file;
+	struct elf_file *file = tsk->elf_file;
 	struct elf_header *header = elf_header(file);
 
 	for (int i = 0; i < header->e_phnum; ++i) {
@@ -106,7 +271,7 @@ static int process_map_elf(struct task_struct *process)
 		int flag = PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL;
 		if (phdr->p_flags & PF_W)
 			flag |= PAGING_IS_WRITEABLE;
-		res = paging_map_to(process->task->page_directory, paging_align_lower_address((void *)phdr->p_vaddr),
+		res = paging_map_to(tsk->page_directory, paging_align_lower_address((void *)phdr->p_vaddr),
 			phdr_phys_address, paging_align_address(phdr_phys_address + phdr->p_memsz), flag);
 		if (IS_ERROR(res))
 			break;
@@ -114,153 +279,199 @@ static int process_map_elf(struct task_struct *process)
 	return res;
 }
 
-static int process_map_binary(struct task_struct *process)
+static int task_map_binary(struct task_struct *tsk)
 {
 	int res = 0;
-	res = paging_map_to(process->task->page_directory, (void *)KERNEL_PROGRAM_VIRTUAL_ADDRESS, process->ptr,
-		paging_align_address(process->ptr + process->size), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
+	res = paging_map_to(tsk->page_directory, (void *)KERNEL_PROGRAM_VIRTUAL_ADDRESS, tsk->ptr,
+		paging_align_address(tsk->ptr + tsk->size), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
 	return res;
 }
 
-static int process_map_memory(struct task_struct *process)
+static int task_map_memory(struct task_struct *tsk)
 {
 	int res = 0;
 
-	switch (process->filetype) {
-		case PROCESS_FILETYPE_ELF:
-			res = process_map_elf(process);
+	switch (tsk->filetype) {
+		case TASK_FILETYPE_ELF:
+			res = task_map_elf(tsk);
 			break;
-		case PROCESS_FILETYPE_BINARY:
-			res = process_map_binary(process);
+		case TASK_FILETYPE_BINARY:
+			res = task_map_binary(tsk);
 			break;
 		default:
-			panic("process_map_memory: Invalid filetype\n");
+			panic("task_map_memory: Invalid filetype\n");
 	}
 	if (res < 0) 
 		goto out;
 
-	paging_map_to(process->task->page_directory, (void*)KERNEL_PROGRAM_VIRTUAL_STACK_ADDRESS_END,
-		process->stack, paging_align_address(process->stack+KERNEL_USER_PROGRAM_STACK_SIZE),
+	paging_map_to(tsk->page_directory, (void*)KERNEL_PROGRAM_VIRTUAL_STACK_ADDRESS_END,
+		tsk->stack, paging_align_address(tsk->stack+KERNEL_USER_PROGRAM_STACK_SIZE),
 		PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
 out:
 	return res;
 }
 
-static int process_get_free_slot()
+static int task_get_free_slot()
 {
-	for (int i = 0; i < KERNEL_MAX_PROCESSES; ++i) {
-		if (processes[i] == NULL)
+	for (int i = 0; i < KERNEL_MAX_TASKS; ++i) {
+		if (tasks[i] == NULL)
 			return i;
 	}
 	return -EISTKN;
 }
 
-int process_load_for_slot(char *filename, struct task_struct **process, int process_slot)
-{
-	int res = 0;
-	struct task_struct *_process = NULL;
-
-	/* 检查参数合法性 */
-	if (!filename || !process || process_get(process_slot)) {
-		res = -EINVAGS;
-		goto out;
-	}
-
-	/* 创建process */
-	_process = kzalloc(sizeof(struct task_struct));
-	if (!_process) {
-		res = -ENOMEM;
-		goto out;
-	}
-	process_init(_process);
-
-	/* 读取文件内容到内存中，让ptr指向这块内存，size设置为文件大小 */
-	res = process_load_data(filename, _process);
-	if (res != KERNEL_ALL_OK)
-		goto out;
-
-	/* 申请一块栈内存，让stack指向这块内存 */
-	_process->stack = kzalloc(KERNEL_USER_PROGRAM_STACK_SIZE);
-	if (!_process->stack) {
-		res = -ENOMEM;
-		goto out;
-	}
-
-	/* 创建一个task，并建立映射 */
-	_process->task = task_new(_process);
-	if (!_process->task) {
-		res = -ENOMEM;
-		goto out;
-	}
-
-	res = process_map_memory(_process);
-	if (res < 0)
-		goto out;
-
-	/* 设置id，filename */
-	_process->id = process_slot;
-	strncpy(_process->filename, filename, sizeof(_process->filename));
-
-	/* 收尾 */
-	*process = _process;
-	processes[process_slot] = _process;
-out:
-	if (IS_ERROR(res)) {
-		process_terminate(_process);
-		kfree(_process);
-		_process = NULL;
-		*process = NULL;
-	}
-
-	return res;
-}
-
-int process_load(char *filename, struct task_struct **process)
-{
-	int res = 0;
-	int process_slot = process_get_free_slot();
-	if (process_slot < 0) {
-		res = -EISTKN;
-		goto out;
-	}
-	
-	res = process_load_for_slot(filename, process, process_slot);
-
-out:
-	return res;
-}
-
-int process_switch(struct task_struct *process)
-{
-	/* 不用切换上下文吗？ */
-	current_process = process;
-	return 0;
-}
-
-int process_load_switch(char *filename, struct task_struct **process)
-{
-	int res = 0;
-	res = process_load(filename, process);
-	if (res < 0)
-		goto out;
-
-	res = process_switch(*process);
-
-out:
-	return res;
-}
-
-static int process_find_free_allocations_index(struct task_struct *process)
+static int task_find_free_allocations_index(struct task_struct *tsk)
 {
 	for (int i = 0; i < KERNEL_MAX_PROGRAM_ALLOCATIONS; ++i) {
-		if (process->allocations[i].ptr != NULL)
+		if (tsk->vm_area[i].ptr != NULL)
 			continue;
 		return i;
 	}
 	return -ENOMEM;
 }
 
-void *process_malloc(struct task_struct *process, size_t size)
+static int task_get_allocation_index_by_addr(struct task_struct *tsk, void *ptr)
+{
+	int i;
+	for (i = 0; i < KERNEL_MAX_PROGRAM_ALLOCATIONS; ++i)
+		if (tsk->vm_area[i].ptr == ptr)
+			return i;
+
+	return -1;
+}
+
+static struct command_argument *task_get_next_command_argument(struct command_argument *command_argument)
+{
+	return task_virtual_addr_to_physical(task_current(), command_argument->next);
+}
+
+static int task_count_command_argument(struct command_argument* root_argument)
+{
+	int res = 0;
+	struct command_argument *current = root_argument;
+	while (current) {
+		res++;
+		current = task_get_next_command_argument(current);
+	}
+	return res;
+}
+
+static void task_terminate_allocations(struct task_struct *tsk)
+{
+	int i;
+	for (i = 0; i < KERNEL_MAX_PROGRAM_ALLOCATIONS; ++i)
+		task_free(tsk, tsk->vm_area[i].ptr);
+}
+
+static void task_terminate_elf_data(struct task_struct *tsk)
+{
+	elf_close(tsk->elf_file);
+}
+
+static void task_terminate_binary_data(struct task_struct *tsk)
+{
+	kfree(tsk->ptr);
+}
+
+static int task_terminate_program_data(struct task_struct *tsk)
+{
+	switch(tsk->filetype) {
+		case TASK_FILETYPE_ELF:
+			task_terminate_elf_data(tsk);
+			break;
+		case TASK_FILETYPE_BINARY:
+			task_terminate_binary_data(tsk);
+			break;
+		default:
+			return -EINVAGS;
+	}
+
+	return 0;
+}
+
+static void task_terminate_command_argument(struct task_struct* tsk)
+{
+	int i;
+	for (i = 0; i < tsk->argument.argc; ++i)
+		kfree(tsk->argument.argv[i]);
+}
+
+int task_load(char *filename, struct task_struct **tsk)
+{
+	int res = 0;
+	struct task_struct *_task = NULL;
+	int task_slot = task_get_free_slot();
+	if (task_slot < 0) {
+		res = -EISTKN;
+		goto out;
+	}
+	
+	/* 检查参数合法性 */
+	if (!filename || !tsk || task_get(task_slot)) {
+		res = -EINVAGS;
+		goto out;
+	}
+
+	/* 创建task */
+	_task = kzalloc(sizeof(struct task_struct));
+	if (!_task) {
+		res = -ENOMEM;
+		goto out;
+	}
+
+	task_init(_task);
+	
+	INIT_LIST_HEAD(&_task->list);
+
+	/* 读取文件内容到内存中，让ptr指向这块内存，size设置为文件大小 */
+	res = task_load_data(filename, _task);
+	if (res != KERNEL_ALL_OK)
+		goto out;
+
+	/* 申请一块栈内存，让stack指向这块内存 */
+	_task->stack = kzalloc(KERNEL_USER_PROGRAM_STACK_SIZE);
+	if (!_task->stack) {
+		res = -ENOMEM;
+		goto out;
+	}
+
+	/* 建立映射 */
+	task_paging_init(_task);
+	res = task_map_memory(_task);
+	if (res < 0)
+		goto out;
+
+	/* 设置id，filename */
+	_task->id = task_slot;
+	strncpy(_task->filename, filename, sizeof(_task->filename));
+
+	/* 设置寄存器 */
+	if (_task->filetype != TASK_FILETYPE_ELF)
+		_task->registers.ip = elf_header(_task->elf_file)->e_entry;
+	else
+		_task->registers.ip = KERNEL_PROGRAM_VIRTUAL_ADDRESS;
+	_task->registers.ss = USER_DATA_SEGMENT;
+	_task->registers.cs = USER_CODE_SEGMENT;
+	_task->registers.esp = KERNEL_PROGRAM_VIRTUAL_STACK_ADDRESS_START;
+
+	/* 收尾 */
+	*tsk = _task;
+	tasks[task_slot] = _task;
+
+	/* 将task插入就绪队列 */
+	task_insert(_task);
+out:
+	if (IS_ERROR(res)) {
+		task_terminate(_task);
+		kfree(_task);
+		_task = NULL;
+		*tsk = NULL;
+	}
+
+	return res;
+}
+
+void *task_malloc(struct task_struct *tsk, size_t size)
 {
 	int ret = 0;
 
@@ -271,22 +482,22 @@ void *process_malloc(struct task_struct *process, size_t size)
 		goto out;
 	}
 	
-	int index = process_find_free_allocations_index(process);
+	int index = task_find_free_allocations_index(tsk);
 	if (index < 0) {
-		pr_err("process_find_free_allocations_index fail\n");
+		pr_err("task_find_free_allocations_index fail\n");
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	ret = paging_map_to(process->task->page_directory, ptr, ptr, paging_align_address(ptr + size),
+	ret = paging_map_to(tsk->page_directory, ptr, ptr, paging_align_address(ptr + size),
 		PAGING_IS_PRESENT | PAGING_IS_WRITEABLE | PAGING_ACCESS_FROM_ALL);
 	if (ret < 0) {
 		pr_err("paging_map_to fail\n");
 		goto out;
 	}
 
-	process->allocations[index].ptr = ptr;
-	process->allocations[index].size = size;
+	tsk->vm_area[index].ptr = ptr;
+	tsk->vm_area[index].size = size;
 
 out:
 	if (ret < 0) {
@@ -296,57 +507,31 @@ out:
 	return ptr;
 }
 
-static int process_get_allocation_index_by_addr(struct task_struct *process, void *ptr)
+void task_free(struct task_struct *tsk, void *ptr)
 {
-	int i;
-	for (i = 0; i < KERNEL_MAX_PROGRAM_ALLOCATIONS; ++i)
-		if (process->allocations[i].ptr == ptr)
-			return i;
-
-	return -1;
-}
-
-void process_free(struct task_struct *process, void *ptr)
-{
-	if (!process || !ptr)
+	if (!tsk || !ptr)
 		return;
 
-	int index = process_get_allocation_index_by_addr(process, ptr);
+	int index = task_get_allocation_index_by_addr(tsk, ptr);
 	if (index < 0)
 		return;
 	
-	struct process_allocation *allocation = &process->allocations[index];
-	paging_map_to(process->task->page_directory, ptr, allocation->ptr,
+	struct vm_area_struct *allocation = &tsk->vm_area[index];
+	paging_map_to(tsk->page_directory, ptr, allocation->ptr,
 		paging_align_address(allocation->ptr + allocation->size), 0x00);
 	
-	process->allocations[index].ptr = 0x00;
-	process->allocations[index].size = 0x00;
+	tsk->vm_area[index].ptr = 0x00;
+	tsk->vm_area[index].size = 0x00;
 	kfree(ptr);
 }
 
-void process_get_argument(struct task_struct *process, int *argc, char ***argv)
+void task_get_argument(struct task_struct *tsk, int *argc, char ***argv)
 {
-	*argc = process->argument.argc;
-	*argv = process->argument.argv;
+	*argc = tsk->argument.argc;
+	*argv = tsk->argument.argv;
 }
 
-static struct command_argument *process_get_next_command_argument(struct command_argument *command_argument)
-{
-	return task_virtual_addr_to_physical(process_current()->task, command_argument->next);
-}
-
-static int process_count_command_argument(struct command_argument* root_argument)
-{
-	int res = 0;
-	struct command_argument *current = root_argument;
-	while (current) {
-		res++;
-		current = process_get_next_command_argument(current);
-	}
-	return res;
-}
-
-int process_inject_argument(struct task_struct *process, struct command_argument *root_argument)
+int task_inject_argument(struct task_struct *tsk, struct command_argument *root_argument)
 {
 	int res = 0;
 	int i = 0;
@@ -355,124 +540,67 @@ int process_inject_argument(struct task_struct *process, struct command_argument
 	char *argument_str;
 	struct command_argument *current = root_argument;
 
-	argc = process_count_command_argument(root_argument);
+	argc = task_count_command_argument(root_argument);
 	if (argc == 0) {
-		pr_err("process_count_command_argument fail\n");
+		pr_err("task_count_command_argument fail\n");
 		res = -EIO;
 		goto out;
 	}
 
-	argv = process_malloc(process, sizeof(char *) * argc);
+	argv = task_malloc(tsk, sizeof(char *) * argc);
 	if (!argv) {
-		pr_err("process_malloc fail\n");
+		pr_err("task_malloc fail\n");
 		res = -ENOMEM;
 		goto out;
 	}
 
 	while (current) {
-		argument_str = process_malloc(process, sizeof(current->argument) + 1);
+		argument_str = task_malloc(tsk, sizeof(current->argument) + 1);
 		if (!argument_str) {
-			pr_err("process_malloc fail\n");
+			pr_err("task_malloc fail\n");
 			res = -ENOMEM;
 			goto out;
 		}
 
 		strncpy(argument_str, current->argument, sizeof(current->argument));
 		argv[i++] = argument_str;
-		current = process_get_next_command_argument(current);
+		current = task_get_next_command_argument(current);
 	}
 
-	process->argument.argc = argc;
-	process->argument.argv = argv;
+	tsk->argument.argc = argc;
+	tsk->argument.argv = argv;
 
 out:
 	if (res < 0) {
 		for (i = 0; i < argc; ++i)
-			process_free(process, argv[i]);
-		process_free(process, argv);
+			task_free(tsk, argv[i]);
+		task_free(tsk, argv);
 	}
 	return res;
 }
 
-static void process_terminate_allocations(struct task_struct *process)
-{
-	int i;
-	for (i = 0; i < KERNEL_MAX_PROGRAM_ALLOCATIONS; ++i)
-		process_free(process, process->allocations[i].ptr);
-}
-
-static void process_terminate_elf_data(struct task_struct *process)
-{
-	elf_close(process->elf_file);
-}
-
-static void process_terminate_binary_data(struct task_struct *process)
-{
-	kfree(process->ptr);
-}
-
-static int process_terminate_program_data(struct task_struct *process)
-{
-	switch(process->filetype) {
-		case PROCESS_FILETYPE_ELF:
-			process_terminate_elf_data(process);
-			break;
-		case PROCESS_FILETYPE_BINARY:
-			process_terminate_binary_data(process);
-			break;
-		default:
-			return -EINVAGS;
-	}
-
-	return 0;
-}
-
-static void process_terminate_command_argument(struct task_struct* process)
-{
-	int i;
-	for (i = 0; i < process->argument.argc; ++i)
-		kfree(process->argument.argv[i]);
-}
-
-static void process_switch_to_any()
-{
-	int i;
-	for (i = 0; i < KERNEL_MAX_PROCESSES; ++i) {
-		if (processes[i]) {
-			current_process = processes[i];
-			return;
-		}
-	}
-
-	panic("No processes to switch to\n");
-}
-
-static void process_unlink(struct task_struct *process)
-{
-	processes[process->id] = 0x00;
-	
-	if (current_process == process)
-		process_switch_to_any();
-}
-
-int process_terminate(struct task_struct *process)
+int task_terminate(struct task_struct *tsk)
 {
 	int ret = 0;
 
-	if (!process)
+	if (!tsk)
 		return 0;
 
-	process_terminate_allocations(process);
+	task_terminate_allocations(tsk);
 
-	ret = process_terminate_program_data(process);
+	ret = task_terminate_program_data(tsk);
 	if (ret < 0)
 		goto out;
 
-	process_terminate_command_argument(process);
+	task_terminate_command_argument(tsk);
 	
-	kfree(process->stack);
-	task_free(process->task);
-	process_unlink(process);
+	kfree(tsk->stack);
+
+	paging_free_4gb(tsk->page_directory);
+
+	task_list_remove(tsk);
+
+	tasks[tsk->id] = 0x00;
 
 out:
 	return ret;

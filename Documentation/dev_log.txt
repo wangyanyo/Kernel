@@ -1,3 +1,10 @@
+Commit: Fork and Copy on write - Part 7
+Time: 2026/11/01 17:03
+DEV_LOG:
+	之前task_struct和thread_info两个结构边界不清晰，逻辑混乱，现将其合并，重命名进程相关的接口；
+	现在task_struct既是调度的实体，也是持有资源的实体，向Linux的架构和编码风格迈进了一步；
+	已通过用户程序测试；	
+
 Commit: Fork and Copy on write - Part 6
 Time: 2026/11/01 15:14
 DEV_LOG:

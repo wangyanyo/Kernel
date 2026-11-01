@@ -4,10 +4,12 @@
 #include "kernel/config.h"
 #include "kernel/kernel.h"
 #include "kernel/string.h"
-#include "kernel/task.h"
+#include "kernel/sched.h"
 #include "kernel/sched.h"
 #include "kernel/keyboard.h"
 #include "kernel/status.h"
+
+extern void task_return(struct registers* regs);
 
 void *isr80h_command0_sum(struct interrupt_frame *frame)
 {
@@ -41,13 +43,13 @@ void *isr80h_command3_putchar(struct interrupt_frame *frame)
 void *isr80h_command4_malloc(struct interrupt_frame *frame)
 {
 	void *item = task_get_stack_item(task_current(), 0);
-	return process_malloc(task_current()->process, (size_t)item);
+	return task_malloc(task_current(), (size_t)item);
 }
 
 void *isr80h_command5_free(struct interrupt_frame *frame)
 {
 	void *item = task_get_stack_item(task_current(), 0);
-	process_free(task_current()->process, item);
+	task_free(task_current(), item);
 	return NULL;
 }
 
@@ -56,19 +58,19 @@ void *isr80h_command6_process_load_start(struct interrupt_frame *frame)
 	int ret = 0;
 	char *user_data_ptr = NULL;
 	char filepath[KERNEL_MAX_PATH] = "0:/";
-	struct task_struct *process = NULL;
+	struct task_struct *tsk = NULL;
 
 	user_data_ptr = task_get_stack_item(task_current(), 0);
 	ret = copy_string_from_task(task_current(), user_data_ptr, filepath + 3, KERNEL_MAX_PATH - 3);
 	if (ret < 0)
 		goto out;
 
-	ret = process_load_switch(filepath, &process);
+	ret = task_load(filepath, &tsk);
 	if (ret < 0)
 		goto out;
 	
-	task_switch(process->task);
-	task_return(&process->task->registers);
+	task_switch(tsk);
+	task_return(&tsk->registers);
 
 out:
 	return (void *)ret;
@@ -80,7 +82,7 @@ void *isr80h_command7_invake_system_command(struct interrupt_frame *frame)
 	int ret = 0;
 	struct command_argument *root_command_argument;
 	char filepath[KERNEL_MAX_PATH] = "0:/";
-	struct task_struct *process = NULL;
+	struct task_struct *tsk = NULL;
 	char *program_name;
 
 	root_command_argument = task_virtual_addr_to_physical(task_current(),
@@ -92,17 +94,17 @@ void *isr80h_command7_invake_system_command(struct interrupt_frame *frame)
 
 	program_name = root_command_argument->argument;
 	strncpy(filepath + 3, program_name, KERNEL_MAX_PATH - 3);
-	ret = process_load_switch(filepath, &process);
+	ret = task_load(filepath, &tsk);
 	if (ret < 0)
 		goto out;
 
-	task_switch(process->task);
+	task_switch(tsk);
 
-	ret = process_inject_argument(process, root_command_argument);
+	ret = task_inject_argument(tsk, root_command_argument);
 	if (ret < 0)
 		goto out;
 	
-	task_return(&process->task->registers);
+	task_return(&tsk->registers);
 out:
 	return (void *)ret;
 	
@@ -110,10 +112,9 @@ out:
 
 void *isr80h_command8_get_program_argument(struct interrupt_frame *frame)
 {
-	struct process_argument *argument = task_virtual_addr_to_physical(task_current(),
+	struct task_argument *argument = task_virtual_addr_to_physical(task_current(),
 		task_get_stack_item(task_current(), 0));
-	// 这里有点thread_info的雏形，task->thread_info，process->task_struct，万变不器离其宗
-	process_get_argument(task_current()->process, &argument->argc, &argument->argv);
+	task_get_argument(task_current(), &argument->argc, &argument->argv);
 	return 0;
 }
 
@@ -121,10 +122,10 @@ void *isr80h_command8_get_program_argument(struct interrupt_frame *frame)
 void *isr80h_command9_exit(struct interrupt_frame *frame)
 {
 	void *item = task_get_stack_item(task_current(), 0);
-	struct task_struct *process = task_current()->process;
+	struct task_struct *tsk = task_current();
 
-	process_terminate(process);
-	process->res = (int)item;
+	task_terminate(tsk);
+	tsk->res = (int)item;
 
 	task_next();
 

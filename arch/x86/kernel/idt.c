@@ -4,7 +4,7 @@
 #include "kernel/config.h"
 #include "kernel/print.h"
 #include "kernel/string.h"
-#include "kernel/task.h"
+#include "kernel/sched.h"
 #include "kernel/kernel.h"
 #include "kernel/status.h"
 #include "kernel/sched.h"
@@ -25,7 +25,7 @@ extern void isr80h_wrapper();
 
 static void idt_handle_exception()
 {
-	process_terminate(process_current());
+	task_terminate(task_current());
 	task_next();
 }
 

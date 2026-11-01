@@ -1,6 +1,6 @@
 FILES = ./build/kernel.asm.o ./build/kernel.o ./build/sched.o ./build/heap.o ./build/elfloader.o \
 	./build/elf.o ./build/classic.o ./build/keyboard.o ./build/isr80h.o ./build/print.o \
-	./build/task.asm.o ./build/task.o ./build/tss.asm.o ./build/gdt.o ./build/gdt.asm.o \
+	./build/task.asm.o ./build/tss.asm.o ./build/gdt.o ./build/gdt.asm.o \
 	./build/fat16.o ./build/file.o ./build/streamer.o ./build/string.o ./build/pparser.o ./build/disk.o \
 	./build/paging.o ./build/paging.asm.o ./build/kheap.o ./build/io.asm.o ./build/idt.asm.o \
 	./build/idt.o
@@ -82,9 +82,6 @@ all: ./build/bin/boot.bin ./build/bin/kernel.bin user_programs
 
 ./build/tss.asm.o: ./arch/x86/kernel/tss.asm
 	nasm -f elf -g ./arch/x86/kernel/tss.asm -o ./build/tss.asm.o
-
-./build/task.o: ./kernel/task.c
-	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/task.c -o ./build/task.o
 
 ./build/sched.o: ./kernel/sched.c
 	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/sched.c -o ./build/sched.o

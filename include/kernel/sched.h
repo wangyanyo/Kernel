@@ -1,16 +1,35 @@
 #ifndef __KERNEL_SCHED_H
 #define __KERNEL_SCHED_H
 
-#include "task.h"
+#include "sched.h"
 #include "config.h"
+#include "paging.h"
+#include "list.h"
 
 typedef enum {
-	PROCESS_FILETYPE_ELF,
-	PROCESS_FILETYPE_BINARY,
-} PROCESS_FILETYPE;
+	TASK_FILETYPE_ELF,
+	TASK_FILETYPE_BINARY,
+} TASK_FILETYPE;
 
-// 这里已经有VA_area的雏形了
-struct process_allocation {
+struct interrupt_frame;
+
+struct registers {
+	uint32_t edi;
+	uint32_t esi;
+	uint32_t ebp;
+	uint32_t ebx;
+	uint32_t edx;
+	uint32_t ecx;
+	uint32_t eax;
+
+	uint32_t ip;
+	uint32_t cs;
+	uint32_t flags;
+	uint32_t esp;
+	uint32_t ss;
+};
+
+struct vm_area_struct {
 	void *ptr;
 	size_t size;
 };
@@ -20,34 +39,33 @@ struct command_argument {
 	struct command_argument *next;
 };
 
-struct process_argument {
+struct task_argument {
 	int argc;
 	char **argv;
 };
 
 struct task_struct {
-	/* The process id */
+
 	uint16_t id;
 
 	char filename[KERNEL_MAX_PATH];
 
-	/* The main process task */
-	struct thread_info *task;
+	struct vm_area_struct vm_area[KERNEL_MAX_PROGRAM_ALLOCATIONS];
 
-	/* The memory (malloc) allocations of the process */
-	struct process_allocation allocations[KERNEL_MAX_PROGRAM_ALLOCATIONS];
-
-	PROCESS_FILETYPE filetype;
+	TASK_FILETYPE filetype;
 	union {
 		void *ptr;
 		struct elf_file *elf_file;
 	};
+	uint32_t size;
 
-	/* The physical pointer to the stack memory */
 	void *stack;
 
-	/* The size of the data pointed by 'ptr' */
-	uint32_t size;
+	struct paging_4gb_chunk *page_directory;
+
+	struct registers registers;
+
+	struct list_head list;
 
 	struct keyboard_buffer {
 		char buffer[KERNEL_KEYBOARD_BUFFER_SIZE];
@@ -56,23 +74,29 @@ struct task_struct {
 		int size;
 	} keyboard;
 
-	struct process_argument argument;
+	struct task_argument argument;
 
-	/* 进程返回值 */
 	int res;
 };
 
-struct task_struct *process_get(int process_id);
-struct task_struct *process_current();
-int process_load_for_slot(char *filename, struct task_struct **process, int process_slot);
-int process_load(char *filename, struct task_struct **process);
-int process_load_switch(char *filename, struct task_struct **process);
-void *paging_align_address(void *ptr);
-void *process_malloc(struct task_struct *process, size_t size);
-void process_free(struct task_struct *process, void *ptr);
-void process_get_argument(struct task_struct *process, int *argc, char ***argv);
-int process_inject_argument(struct task_struct *process, struct command_argument *root_argument);
-int process_terminate(struct task_struct *process);
-int process_switch(struct task_struct *process);
+struct task_struct *task_get(int pid);
+struct task_struct *task_current();
+
+int task_switch(struct task_struct *task);
+void task_next();
+int task_page();
+int task_run_first_ever_task();
+int task_load(char *filename, struct task_struct **tsk);
+int task_terminate(struct task_struct *tsk);
+
+void *task_malloc(struct task_struct *tsk, size_t size);
+void task_free(struct task_struct *tsk, void *ptr);
+void task_get_argument(struct task_struct *tsk, int *argc, char ***argv);
+int task_inject_argument(struct task_struct *tsk, struct command_argument *root_argument);
+
+void task_current_save_state(struct interrupt_frame *frame);
+int copy_string_from_task(struct task_struct *tsk, void *virtual, void *phys, int max);
+void *task_get_stack_item(struct task_struct *tsk, int index);
+void *task_virtual_addr_to_physical(struct task_struct *task, void *virtual_addr);
 
 #endif

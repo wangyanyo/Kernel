@@ -14,7 +14,7 @@
 #include "kernel/string.h"
 #include "kernel/config.h"
 #include "kernel/sched.h"
-#include "kernel/task.h"
+#include "kernel/sched.h"
 #include "kernel/isr80h.h"
 #include "kernel/keyboard.h"
 
@@ -147,8 +147,8 @@ void kernel_main()
 
 	isr80h_register_commands();
 
-	struct task_struct *process = NULL;
-	int res = process_load_switch("0:/shell.elf", &process);
+	struct task_struct *tsk = NULL;
+	int res = task_load("0:/shell.elf", &tsk);
 	if (res < 0)
 		panic("Failed to load shell.elf\n");
 	
