@@ -1,3 +1,8 @@
+Commit: Fork and Copy on write - Part 6
+Time: 2026/11/01 15:14
+DEV_LOG:
+	将thread_info使用的普通双向链表修改成内嵌式双向链表；已通过用户程序测试；
+
 Commit: Update daily
 Time: 2026/10/18 23:06
 DEV_LOG:

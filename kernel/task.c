@@ -11,23 +11,14 @@
 
 struct thread_info *current_task = 0;
 
-struct thread_info *task_head = 0;
-struct thread_info *task_tail = 0;
+LIST_HEAD(tasks);
 
-/* 这里代码冗余，后续用嵌入式链表改造 */
 static void task_insert(struct thread_info *task)
 {
-	if (!task_head) {
-		task_head = task;
-		task_tail = task;
+	if (list_empty(&tasks)) {
 		current_task = task;
-		return;
 	}
-
-	task_tail->next = task;
-	task->prev = task_tail;
-	task->next = NULL;
-	task_tail = task;
+	list_add(&task->list, &tasks);
 }
 
 static int task_init(struct thread_info *task, struct task_struct *process)
@@ -36,7 +27,8 @@ static int task_init(struct thread_info *task, struct task_struct *process)
 	if (!task->page_directory)
 		return -EIO;
 
-	
+	INIT_LIST_HEAD(&task->list);
+
 	if (process->filetype != PROCESS_FILETYPE_ELF)
 		task->registers.ip = elf_header(process->elf_file)->e_entry;
 	else
@@ -50,27 +42,12 @@ static int task_init(struct thread_info *task, struct task_struct *process)
 	return 0;
 }
 
-/* 这个链表维护起来太麻烦了，以后要换成嵌入式链表 */
 static void task_list_remove(struct thread_info *task)
 {
-	if (task_head == task) {
-		task_head = task->next;
-	}
-
-	if (task_tail == task) {
-		task_tail = task->prev;
-	}
+	list_del_init(&task->list);
 
 	if (current_task == task) {
-		current_task = task_get_next(current_task);
-	}
-
-	if (task->prev) {
-		task->prev->next = task->next;
-	}
-
-	if (task->next) {
-		task->next->prev = task->prev;
+		current_task = task_get_next();
 	}
 }
 
@@ -107,9 +84,10 @@ struct thread_info *task_current()
 
 struct thread_info *task_get_next()
 {
-	if (!current_task || !current_task->next)
-		return task_head;
-	return current_task->next;
+	if (list_empty(&tasks)) {
+		panic("Kernel panic: no tasks exist!");
+	}
+	return list_first_entry(&tasks, struct thread_info, list);
 }
 
 int task_free(struct thread_info *task)
@@ -150,8 +128,8 @@ int task_run_first_ever_task()
 	if (!current_task)
 		panic("task_run_first_ever_task: No current task exists!\n");
 
-	task_switch(task_head);
-	task_return(&task_head->registers);
+	task_switch(current_task);
+	task_return(&current_task->registers);
 	return 0;
 }
 

@@ -3,6 +3,7 @@
 
 #include "kernel/config.h"
 #include "kernel/paging.h"
+#include "kernel/list.h"
 
 struct interrupt_frame;
 
@@ -28,8 +29,7 @@ struct thread_info {
 	struct paging_4gb_chunk *page_directory;
 	struct registers registers;
 	struct task_struct *process;
-	struct thread_info *next;
-	struct thread_info *prev;
+	struct list_head list;
 };
 
 struct thread_info *task_new(struct task_struct *process);
