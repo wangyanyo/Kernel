@@ -1,0 +1,8 @@
+1、今天继续开发Patch：Fork and Copy on write - Part 8 的代码；
+2、该Patch要做的工作是创建一个mm_struct数据结构，将原task_struct数据结构中的相关成员放入其中，并重构部分代码；
+3、重构内容如下：
+	（1）将vm_area_struct从数组结构变成链表结构
+	（2）将struct paging_4gb_chunk * 替换成 void *
+	（3）filename名称改为exe_path
+	（4）不加载二进制文件，只加载elf文件
+	目前做到第（2）步
